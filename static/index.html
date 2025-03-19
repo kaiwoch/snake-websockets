@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game Visualization</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <!-- Скрипты с использованием правильного пути для модуля Three.js -->
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+          }
+        }
+      </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        let scene, camera, renderer, clock;
+        let snakeMeshes = [], foodMeshes = [], specialFoodMeshes = [], enemyMeshes = [], fenceMeshes = [];
+        const MAX_UPDATES_PER_SECOND = 10; // Ограничиваем частоту обновлений (10 обновлений в секунду)
+        let lastUpdateTime = 0;
+
+        // Установки для сцены
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        clock = new THREE.Clock();
+
+        // Слушатель для WebSocket
+        const socket = new WebSocket("ws://localhost:8080/ws");
+        socket.onmessage = function (event) {
+            const gameData = JSON.parse(event.data);
+            updateGameState(gameData);
+        };
+
+        // Функция для обновления состояния игры
+        function updateGameState(gameData) {
+            const currentTime = Date.now();
+            if (currentTime - lastUpdateTime < 1000 / MAX_UPDATES_PER_SECOND) {
+                return; // Пропускаем обновление, если прошло слишком мало времени
+            }
+            lastUpdateTime = currentTime;
+
+            // Очищаем старые объекты
+    
+            enemyMeshes.forEach(mesh => scene.remove(mesh));
+            enemyMeshes = [];
+
+            // Добавляем врагов
+            gameData.enemies.forEach(enemy => {
+                const enemyColor = 0x00ff00; // Зеленый цвет для врагов
+                enemy.geometry.forEach((block, index) => {
+                    const geometry = new THREE.CylinderGeometry(1, 1, 2, 8);
+                    const material = new THREE.MeshBasicMaterial({ color: enemyColor });
+                    const enemyMesh = new THREE.Mesh(geometry, material);
+
+                    enemyMesh.position.set(block[0] - 90, block[1] - 90, block[2]);
+                    scene.add(enemyMesh);
+                    enemyMeshes.push(enemyMesh);
+                });
+            });
+        }
+
+        // Камера вращается с помощью мыши
+        let controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.25;
+        controls.screenSpacePanning = false;
+        controls.maxPolarAngle = Math.PI / 2;
+
+        camera.position.z = 150;
+
+        // Функция анимации
+        function animate() {
+            requestAnimationFrame(animate);
+
+            controls.update(); // Обновление контроля камеры
+            renderer.render(scene, camera);
+        }
+
+        // Обработка изменения размера окна
+        window.addEventListener('resize', function () {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+
+        // Начало анимации
+        animate();
+    </script>
+</body>
+</html>
