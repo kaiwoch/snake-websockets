@@ -2,51 +2,80 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+type MapStruct struct {
+	Enemies []Enemy `json:"enemies"`
+}
+
 type Enemy struct {
 	Geometry [][]int `json:"geometry"`
-	Status   string  `json:"status"`
-	Kills    int     `json:"kills"`
 }
 
-// Исходные враги
-var enemies = []Enemy{
-	{Geometry: [][]int{{35, 81, 4}}, Status: "alive", Kills: 0},
-	{Geometry: [][]int{{69, 60, 2}}, Status: "alive", Kills: 0},
-	{Geometry: [][]int{{175, 118, 58}}, Status: "alive", Kills: 0},
-	{Geometry: [][]int{{14, 71, 42}}, Status: "alive", Kills: 0},
-	{Geometry: [][]int{{58, 74, 7}, {58, 75, 7}, {58, 76, 7}, {58, 77, 7}}, Status: "alive", Kills: 0},
-}
-
-var mapSize = [3]int{180, 180, 60} // Размер карты
+var (
+	mapSize = [3]int{180, 180, 60} // Размер карты
+	enemies []Enemy                // Глобальная переменная с врагами
+	mutex   = &sync.Mutex{}        // Мьютекс для потокобезопасного доступа
+)
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 var clients = make(map[*websocket.Conn]bool)
-var mutex = &sync.Mutex{}
 
+// Читаем змей из файла JSON
+func ReadLog(filename string) ([]Enemy, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var sm MapStruct
+	if err := json.NewDecoder(f).Decode(&sm); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга JSON: %v", err)
+	}
+
+	return sm.Enemies, nil
+}
+
+// Двигаем всех врагов
 func moveEnemies() {
-	for i := range enemies {
-		for j := range enemies[i].Geometry {
-			enemies[i].Geometry[j][0]++ // Двигаем врага вперед по оси X
+	mutex.Lock()
+	defer mutex.Unlock()
 
-			// Проверяем границы карты
-			if enemies[i].Geometry[j][0] >= mapSize[0] {
-				enemies[i].Geometry[j][0] = 0 // Перемещаем в начало
-			}
+	for i := range enemies {
+		// Берем координаты головы змеи
+		headX, headY, headZ := enemies[i].Geometry[0][0], enemies[i].Geometry[0][1], enemies[i].Geometry[0][2]
+
+		// Двигаем голову вперёд (здесь можно выбрать любую логику движения)
+		headX++ // Например, двигаем вправо по оси X
+
+		// Проверяем границы карты
+		if headX >= mapSize[0] {
+			headX = 0 // Перемещаем в начало
 		}
+
+		// Двигаем тело змеи: каждый сегмент занимает место предыдущего
+		for j := len(enemies[i].Geometry) - 1; j > 0; j-- {
+			enemies[i].Geometry[j] = enemies[i].Geometry[j-1] // Текущий сегмент занимает позицию предыдущего
+		}
+
+		// Обновляем позицию головы
+		enemies[i].Geometry[0] = []int{headX, headY, headZ}
 	}
 }
 
+// Отправляем обновленные координаты всем клиентам
 func broadcastEnemies() {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -62,10 +91,11 @@ func broadcastEnemies() {
 	}
 }
 
+// Обработка WebSocket-подключений
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Println("Ошибка WebSocket:", err)
 		return
 	}
 	defer ws.Close()
@@ -86,8 +116,15 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	var err error
+	enemies, err = ReadLog("test_logs_2.json")
+	if err != nil {
+		log.Fatal("[ERROR] Не удалось загрузить змей из JSON:", err)
+	}
+
 	http.HandleFunc("/ws", handleConnections)
 
+	// Запускаем бесконечный цикл движения и обновления
 	go func() {
 		for {
 			time.Sleep(500 * time.Millisecond)
@@ -97,7 +134,7 @@ func main() {
 	}()
 
 	log.Println("WebSocket сервер запущен на :8080")
-	err := http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatal("Ошибка сервера:", err)
 	}
